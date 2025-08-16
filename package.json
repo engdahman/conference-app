@@ -1,0 +1,23 @@
+{
+  "name": "conference-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "echo \"No lint config\""
+  },
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "cookie": "0.6.0",
+    "formidable": "^2.1.5",
+    "jsonwebtoken": "9.0.2",
+    "mongoose": "^8.3.2",
+    "next": "^14.2.31",
+    "nodemailer": "^6.10.1",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
