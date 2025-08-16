@@ -6,11 +6,12 @@ import { useRouter } from 'next/router'
 /* ===================== أدوات مساعدة عامة ===================== */
 function resolveSrc(src = '') {
   if (!src) return ''
-  src = src.replace(/\\/g, '/')
-  if (src.startsWith('http://') || src.startsWith('https://')) return src
-  if (src.startsWith('/')) return src
-  if (src.startsWith('uploads/')) return '/' + src
-  return src
+  src = String(src).trim().replace(/\\/g, '/')
+  if (/^https?:\/\//i.test(src)) return src        // رابط خارجي
+  if (src.startsWith('/')) return src               // مسار جذري جاهز
+  if (src.startsWith('uploads/')) return '/' + src // داخل public/uploads
+  // أي مسار نسبي مثل "org-logo.png" -> "/org-logo.png"
+  return '/' + src.replace(/^\.?\/+/, '')
 }
 function cx(...a){ return a.filter(Boolean).join(' ') }
 
@@ -121,10 +122,17 @@ function SettingsTab({ api }) {
   async function save() {
     setBusy(true); setMsg('')
     try {
+      // تمرير قيم الصور عبر resolveSrc قبل الحفظ
+      const payload = {
+        ...form,
+        orgLogo: resolveSrc(form.orgLogo),
+        eventLogo: resolveSrc(form.eventLogo),
+        bannerImage: resolveSrc(form.bannerImage),
+      }
       const r = await api('/api/settings', {
         method:'PUT',
         headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify(form)
+        body: JSON.stringify(payload)
       })
       const d = await r.json()
       setMsg(d?.success ? 'تم الحفظ ✓' : ('تعذر الحفظ: ' + (d?.error || d?.message || '')))
@@ -609,7 +617,7 @@ function AttendeesTab({ api }){
 /* ===================== صفحة الأدمن (حارس جلسة + تبويبات) ===================== */
 const TABS = ['settings','speakers','sponsors','agenda','attendees']
 
-export default function AdminPage(){
+function AdminPage(){
   const router = useRouter()
   const { api, needLogin, gotoLogin } = useApi401Redirect()
   const [tab, setTab] = useState('settings')
@@ -675,7 +683,9 @@ export default function AdminPage(){
 
     const query = t === 'settings' ? {} : { tab: t }
     const desired = '/admin' + (query.tab ? `?tab=${encodeURIComponent(query.tab)}` : '')
-    const current = typeof window !== 'undefined' ? window.location.pathname + window.location.search : router.asPath
+    const current = typeof window !== 'undefined'
+      ? (window.location.pathname + window.location.search)
+      : router.asPath
     if (current !== desired) {
       router.replace({ pathname: '/admin', query }, undefined, { shallow: true })
     }
@@ -746,6 +756,8 @@ export default function AdminPage(){
     </main>
   )
 }
+
+export default AdminPage
 
 /* ======== SSR Guard: يعيد التوجيه إلى /admin/login عند غياب/بطلان التوكن ======== */
 export async function getServerSideProps(ctx) {
