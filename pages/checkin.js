@@ -60,8 +60,8 @@ export default function CheckInPage() {
 
   async function submit(e, overrideValue) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault()
-    // 👇 ننظّف أي قيمة قبل الإرسال
-    let code = parseRawInput(overrideValue ?? q || '')
+    // 👇 ننظّف أي قيمة قبل الإرسال (أُصلِحَت الأقواس هنا)
+    let code = parseRawInput((overrideValue ?? q) || '')
     code = code.trim()
     // احذر من الإيميلات/أرقام الجوال — لا نحوّلها لكابتال
     if (code && !code.includes('@') && !/^\+?\d{6,}$/.test(code)) {
