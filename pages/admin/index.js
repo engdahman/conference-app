@@ -529,6 +529,7 @@ function AttendeesTab({ api }){
   const [rows,setRows] = useState([])
   const [q,setQ] = useState('')
   const [err,setErr] = useState('')
+  const [selected, setSelected] = useState(new Set())
 
   async function load(){
     setErr('')
@@ -566,6 +567,22 @@ function AttendeesTab({ api }){
     return !s ? rows : rows.filter(r => JSON.stringify(r).toLowerCase().includes(s))
   },[rows,q])
 
+  function toggle(id){ setSelected(p => { const n=new Set(p); n.has(id)?n.delete(id):n.add(id); return n }) }
+  function selectAll(){ setSelected(new Set(filtered.map(r=>r._id))) }
+  function clearSel(){ setSelected(new Set()) }
+  async function deleteSelected(){
+    if(!selected.size) return
+    if(!confirm('حذف العناصر المحددة؟')) return
+    const r = await api('/api/admin/attendees', {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ids: Array.from(selected) })
+    })
+    const d = await r.json().catch(()=>null)
+    if(d?.success){ clearSel(); await load() }
+    else alert('فشل الحذف')
+  }
+
   return (
     <div className="card">
       <div className="row" style={{justifyContent:'space-between',marginBottom:10}}>
@@ -574,6 +591,7 @@ function AttendeesTab({ api }){
           <button className="btn" onClick={load}>تحديث</button>
           <button className="btn" onClick={exportCsv} disabled={!rows.length}>تصدير CSV</button>
           <Link className="btn" href="/checkin">واجهة تسجيل الدخول (Check-in)</Link>
+          <button className="btn" onClick={deleteSelected} disabled={!selected.size}>حذف المحدد</button>
         </div>
       </div>
 
@@ -581,6 +599,7 @@ function AttendeesTab({ api }){
 
       <div className="table">
         <div className="thead">
+          <div><input type="checkbox" onChange={e=> e.target.checked ? selectAll() : clearSel()} /></div>
           <div>الاسم</div><div>البريد</div><div>الهاتف</div>
           <div>الحالة</div><div>المسمى</div><div>جهة العمل</div>
           <div>القطاع</div><div>الجنس</div><div>سنة التخرج</div>
@@ -588,6 +607,7 @@ function AttendeesTab({ api }){
         </div>
         {filtered.map(r=>(
           <div key={r._id} className="tr">
+            <div><input type="checkbox" checked={selected.has(r._id)} onChange={()=>toggle(r._id)} /></div>
             <div>{r.fullName||'—'}</div>
             <div>{r.email||'—'}</div>
             <div>{r.phone||'—'}</div>
@@ -608,7 +628,7 @@ function AttendeesTab({ api }){
         .thead,.tr{
           display:grid;
           grid-template-columns:
-            1.3fr 1.6fr 1fr 0.9fr 1fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.5fr;
+            0.45fr 1.3fr 1.6fr 1fr 0.9fr 1fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.5fr;
           gap:8px;align-items:center
         }
         .thead{font-weight:700;color:#222}
@@ -618,8 +638,54 @@ function AttendeesTab({ api }){
   )
 }
 
+/* ===================== تبويب: المستخدمون (staff) ===================== */
+function UsersTab({ api }){
+  const [rows,setRows]=useState([])
+  const [email,setEmail]=useState('')
+  const [password,setPassword]=useState('')
+
+  async function load(){ const r=await api('/api/admin/users'); const d=await r.json(); setRows(d.users||[]) }
+  useEffect(()=>{ load() },[])
+
+  async function add(){
+    const r=await api('/api/admin/users',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password, role:'staff' })
+    })
+    const d=await r.json()
+    if(d?.success){ setEmail(''); setPassword(''); load() } else alert(d?.error||'فشل الإضافة')
+  }
+  async function del(id){
+    if(!confirm('حذف هذا المستخدم؟')) return
+    await api('/api/admin/users?id='+id,{ method:'DELETE' })
+    load()
+  }
+
+  return (
+    <div className="card">
+      <h3>المستخدمون (صلاحية Check-in)</h3>
+      <div className="row" style={{marginBottom:10}}>
+        <input className="input" placeholder="staff@domain.com" value={email} onChange={e=>setEmail(e.target.value)} style={{maxWidth:260}}/>
+        <input className="input" placeholder="كلمة المرور" type="password" value={password} onChange={e=>setPassword(e.target.value)} style={{maxWidth:220}}/>
+        <button className="btn primary" onClick={add} disabled={!email||!password}>إضافة كـ Staff</button>
+      </div>
+      <div className="cards">
+        {rows.map(u=>(
+          <div key={u._id} className="card">
+            <div><b>{u.email}</b></div>
+            <div className="tag" style={{marginTop:6}}>{u.role}</div>
+            <div className="row" style={{marginTop:8}}>
+              <button className="btn" onClick={()=>del(u._id)}>حذف</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ===================== صفحة الأدمن ===================== */
-const TABS = ['settings','speakers','sponsors','agenda','attendees']
+const TABS = ['settings','speakers','sponsors','agenda','attendees','users']
 
 function AdminPage(){
   const router = useRouter()
@@ -711,6 +777,12 @@ function AdminPage(){
           <h2>لوحة التحكم</h2>
           <div className="row">
             <Link className="btn" href="/">العودة للموقع</Link>
+            <button
+              className="btn"
+              onClick={async ()=>{ try{ await fetch('/api/auth/logout',{method:'POST',credentials:'include'}) }catch{} window.location.href='/admin/login' }}
+            >
+              تسجيل الخروج
+            </button>
           </div>
         </header>
 
@@ -726,6 +798,7 @@ function AdminPage(){
           <button className={cx('tab', tab==='sponsors'&&'active')} onClick={()=>switchTab('sponsors')}>الرعاة</button>
           <button className={cx('tab', tab==='agenda'&&'active')} onClick={()=>switchTab('agenda')}>الأجندة</button>
           <button className={cx('tab', tab==='attendees'&&'active')} onClick={()=>switchTab('attendees')}>الحضور</button>
+          <button className={cx('tab', tab==='users'&&'active')} onClick={()=>switchTab('users')}>المستخدمون</button>
         </nav>
 
         {tab==='settings'  && <SettingsTab api={api} basePath={basePath}/>}
@@ -733,6 +806,7 @@ function AdminPage(){
         {tab==='sponsors'  && <SponsorsTab api={api} basePath={basePath}/>}
         {tab==='agenda'    && <AgendaTab api={api}/>}
         {tab==='attendees' && <AttendeesTab api={api}/>}
+        {tab==='users'     && <UsersTab api={api}/>}
       </div>
 
       <style jsx>{`
