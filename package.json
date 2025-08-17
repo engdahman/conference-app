@@ -9,6 +9,7 @@
     "lint": "echo \"No lint config\""
   },
   "dependencies": {
+    "@zxing/browser": "^0.1.5",
     "bcryptjs": "2.4.3",
     "cookie": "0.6.0",
     "formidable": "^2.1.5",

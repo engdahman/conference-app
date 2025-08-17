@@ -4,6 +4,7 @@ import { useRouter } from 'next/router'
 
 export default function CheckInPage() {
   const router = useRouter()
+
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('idle') // idle | busy | ok | already | notfound | missing | error
   const [msg, setMsg] = useState('')
@@ -15,6 +16,7 @@ export default function CheckInPage() {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const rafRef = useRef(0)
+  const zxingControlsRef = useRef(null) // لإيقاف ZXing
 
   const inputRef = useRef(null)
 
@@ -26,11 +28,23 @@ export default function CheckInPage() {
     if (e.key === 'Enter') submit(e)
   }
 
-  // داخل submit
-async function submit(e, overrideValue) {
-  if (e && typeof e.preventDefault === 'function') e.preventDefault()
-  const code = String(((overrideValue ?? q) || '')).trim()
-  setAtt(null); setMsg('')
+  // معالجة النص الممسوح (يدعم روابط تحتوي على ?code= أو ?ticket= أو ?t=)
+  function handleScannedText(raw) {
+    const txt = String(raw || '').trim()
+    if (!txt) return
+    let code = txt
+    try {
+      const u = new URL(txt)
+      code = u.searchParams.get('code') || u.searchParams.get('ticket') || u.searchParams.get('t') || txt
+    } catch {}
+    setQ(code)
+    submit(null, code)
+  }
+
+  async function submit(e, overrideValue) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault()
+    const code = String(((overrideValue ?? q) || '')).trim()
+    setAtt(null); setMsg('')
 
     if (!code) {
       setStatus('missing')
@@ -71,7 +85,7 @@ async function submit(e, overrideValue) {
     }
   }
 
-  // ➊ التلقّط من رابط عند فتحه من الكاميرا (بدون HTTPS)
+  // ➊ التقاط الكود من الرابط (عند فتحه من تطبيق الكاميرا)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
@@ -81,15 +95,13 @@ async function submit(e, overrideValue) {
       u.searchParams.get('t')
     if (codeParam) {
       const val = decodeURIComponent(codeParam)
-      // نظّف الاستعلام كي لا يُعاد التنفيذ عند الرجوع
-      window.history.replaceState({}, '', u.pathname)
-      // نفّذ التحقق مباشرة
+      window.history.replaceState({}, '', u.pathname) // نظف الاستعلام
       submit(null, val)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ➋ ماسح QR داخل الصفحة (يحتاج HTTPS أو localhost)
+  // ➋ ماسح QR داخل الصفحة (HTTPS أو localhost)
   async function startScan() {
     setScanErr('')
     if (!navigator?.mediaDevices?.getUserMedia) {
@@ -113,7 +125,7 @@ async function submit(e, overrideValue) {
       }
       setScanOn(true)
 
-      // استخدم BarcodeDetector إن توفر
+      // أولاً: BarcodeDetector إن توفر
       if ('BarcodeDetector' in window) {
         const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
         const loop = async () => {
@@ -123,24 +135,42 @@ async function submit(e, overrideValue) {
             const raw = codes?.[0]?.rawValue
             if (raw) {
               await stopScan()
-              setQ(raw)
-              submit(null, raw)
+              handleScannedText(raw)
               return
             }
           } catch {}
           rafRef.current = requestAnimationFrame(loop)
         }
-        loop()
-      } else {
-        setScanErr('ماسح QR غير مدعوم في هذا المتصفح. استخدم الكاميرا العادية لمسح رابط الكود.')
+        rafRef.current = requestAnimationFrame(loop)
+        return
       }
+
+      // ثانياً: Fallback بـ ZXing
+      const { BrowserMultiFormatReader } = await import('@zxing/browser')
+      const reader = new BrowserMultiFormatReader()
+      const controls = await reader.decodeFromVideoDevice(
+        undefined,
+        videoRef.current,
+        (result /*, err */) => {
+          if (result) {
+            const txt = result.getText()
+            stopScan().then(() => handleScannedText(txt))
+          }
+        }
+      )
+      zxingControlsRef.current = controls
     } catch (e) {
       setScanErr(e?.message || 'تعذر فتح الكاميرا')
+      await stopScan()
     }
   }
 
   async function stopScan() {
     cancelAnimationFrame(rafRef.current)
+    try {
+      await zxingControlsRef.current?.stop?.()
+    } catch {}
+    zxingControlsRef.current = null
     setScanOn(false)
     try {
       const tracks = streamRef.current?.getTracks?.() || []
@@ -149,11 +179,14 @@ async function submit(e, overrideValue) {
     if (videoRef.current) videoRef.current.srcObject = null
   }
 
-  useEffect(() => () => { stopScan() }, []) // تنظيف عند الخروج
+  useEffect(() => {
+    return () => { stopScan() } // تنظيف عند مغادرة الصفحة
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <main dir="rtl" style={{display:'grid',placeItems:'center',minHeight:'80vh',padding:16}}>
-      <form onSubmit={submit} style={{background:'#fff',border:'1px solid #eee',borderRadius:12,padding:16,minWidth:320, maxWidth:560}}>
+      <form onSubmit={submit} style={{background:'#fff',border:'1px solid #eee',borderRadius:12,padding:16,minWidth:320,maxWidth:560}}>
         <h3 style={{marginTop:0}}>(Check-in) واجهة تسجيل الدخول</h3>
         <div className="muted" style={{marginBottom:8,fontSize:13}}>
           امسح QR أو اكتب الكود/الإيميل/الجوال ثم اضغط تأكيد.
