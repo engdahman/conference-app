@@ -1,33 +1,32 @@
-import mongoose, { Schema } from 'mongoose'
+// models/Settings.js
+import mongoose from 'mongoose'
 
-const SettingsSchema = new Schema(
-  {
-    siteName: String,
-    eventTitle: String,
-    tagline: String,
-    eventDateRangeText: String,
-    eventLocationText: String,
-    eventAddress: String,
+const SettingsSchema = new mongoose.Schema({
+  siteName: { type: String, default: '' },
 
-    websiteUrl: String,
-    socialX: String,
-    socialFacebook: String,
+  eventTitle: { type: String, default: '' },
+  tagline: { type: String, default: '' },
 
-    orgLogo: String,     // /uploads/xxxx.png
-    eventLogo: String,   // /uploads/xxxx.png
+  eventDateRangeText: { type: String, default: '' },
+  eventLocationText: { type: String, default: '' },
+  eventAddress: { type: String, default: '' },
 
-    bannerEnabled: { type: Boolean, default: false },
-    bannerImage: String, // /uploads/xxxx.png
-    bannerLink: String,
+  orgLogo: { type: String, default: '' },
+  eventLogo: { type: String, default: '' },
 
-    eventStartISO: String,
-    eventEndISO: String,
-    timezone: String,
+  bannerEnabled: { type: Boolean, default: false },
+  bannerImage: { type: String, default: '' },
+  bannerLink:   { type: String, default: '' },
+
+  // ✅ حقول زر "سجّل الآن"
+  registrationMode: {
+    type: String,
+    enum: ['internal', 'external'],
+    default: 'internal'
   },
-  {
-    timestamps: true,
-    strict: false,       // عدم رمي خطأ لو أرسلت حقول إضافية
-  }
-)
+  registrationUrl:   { type: String, default: '' },
+  registrationNewTab:{ type: Boolean, default: false },
+
+}, { timestamps: true })
 
 export default mongoose.models.Settings || mongoose.model('Settings', SettingsSchema)

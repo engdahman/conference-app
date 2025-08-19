@@ -2,62 +2,70 @@
 import { dbConnect } from '@/lib/db'
 import Settings from '@/models/Settings'
 
-const normalizeWebPath = (v='') => {
-  if (!v) return ''
-  return v
-    .toString()
-    .trim()
-    .replace(/\\/g, '/')                         // ويندوز -> '/'
-    .replace(/^.*\/public(\/uploads\/)/, '$1')   // شطب أي public/
-    .replace(/^https?:\/\/[^/]+(\/uploads\/)/, '$1') // شطب الهوست لو انحفظ مطلق
-    .replace(/^uploads\//, '/uploads/')          // تأكيد البداية بـ /uploads/
+function asBool(v){
+  const s = String(v ?? '').trim().toLowerCase()
+  return v === true || v === 1 || v === '1' || s === 'true' || s === 'on' || s === 'yes'
+}
+function rootPath(src=''){
+  if (!src) return ''
+  let s = String(src).trim().replace(/\\/g,'/')
+  if (/^https?:\/\//i.test(s)) return s
+  if (s.startsWith('/')) return s
+  return '/' + s.replace(/^\.?\/+/, '')
 }
 
-const toPlain = (doc={}) => {
-  if (!doc || typeof doc !== 'object') return doc
-  const obj = { ...doc }
-  if (obj._id?.toString) obj._id = obj._id.toString()
-  for (const k in obj) if (obj[k] instanceof Date) obj[k] = obj[k].toISOString()
-  return obj
-}
-
-export default async function handler(req, res) {
+export default async function handler(req, res){
   await dbConnect()
 
   if (req.method === 'GET') {
     const doc = await Settings.findOne({}).lean()
-    return res.json({ success: true, settings: doc ? toPlain(doc) : {} })
+    return res.json({ success: true, settings: doc || {} })
   }
 
   if (req.method === 'PUT') {
-    const b = req.body || {}
-    const update = {
-      siteName: b.siteName || '',
-      eventTitle: b.eventTitle || '',
-      tagline: b.tagline || '',
-      eventDateRangeText: b.eventDateRangeText || '',
-      eventLocationText: b.eventLocationText || '',
-      eventAddress: b.eventAddress || '',
+    try {
+      const b = req.body || {}
 
-      websiteUrl: b.websiteUrl || '',
-      socialX: b.socialX || '',
-      socialFacebook: b.socialFacebook || '',
+      // نسمح فقط بهذه الحقول (تجاهُل أي شيء غريب)
+      const clean = {
+        siteName: String(b.siteName || ''),
+        eventTitle: String(b.eventTitle || ''),
+        tagline: String(b.tagline || ''),
 
-      orgLogo: normalizeWebPath(b.orgLogo || ''),
-      eventLogo: normalizeWebPath(b.eventLogo || ''),
+        eventDateRangeText: String(b.eventDateRangeText || ''),
+        eventLocationText: String(b.eventLocationText || ''),
+        eventAddress: String(b.eventAddress || ''),
 
-      bannerEnabled: !!b.bannerEnabled,
-      bannerImage: normalizeWebPath(b.bannerImage || ''),
-      bannerLink: b.bannerLink || '',
+        orgLogo: rootPath(b.orgLogo || ''),
+        eventLogo: rootPath(b.eventLogo || ''),
 
-      eventStartISO: b.eventStartISO || '',
-      eventEndISO: b.eventEndISO || '',
-      timezone: b.timezone || ''
+        bannerEnabled: asBool(b.bannerEnabled),
+        bannerImage: rootPath(b.bannerImage || ''),
+        bannerLink: String(b.bannerLink || ''),
+
+        // ✅ الحقول الجديدة
+        registrationMode: (String(b.registrationMode || 'internal').toLowerCase() === 'external') ? 'external' : 'internal',
+        registrationUrl: String(b.registrationUrl || '').trim(),
+        registrationNewTab: asBool(b.registrationNewTab),
+      }
+
+      // إن لم يكن الرابط صالحًا، اجبر الوضع على داخلي
+      if (clean.registrationMode === 'external' && !/^https?:\/\//i.test(clean.registrationUrl)) {
+        clean.registrationMode = 'internal'
+      }
+
+      const saved = await Settings.findOneAndUpdate(
+        {},
+        { $set: clean },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean()
+
+      return res.json({ success: true, settings: saved })
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message || 'server_error' })
     }
-
-    const doc = await Settings.findOneAndUpdate({}, update, { upsert: true, new: true })
-    return res.json({ success: true, settings: toPlain(doc.toObject()) })
   }
 
-  return res.status(405).json({ success:false, message:'Method Not Allowed' })
+  res.setHeader('Allow', ['GET','PUT'])
+  return res.status(405).json({ success:false, error: 'method_not_allowed' })
 }

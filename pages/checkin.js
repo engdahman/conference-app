@@ -2,6 +2,66 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 
+/* ==================== شريط المستخدم (داخل الصفحة) ==================== */
+function AuthBar({ afterLogout = '/admin/login?next=/checkin' }) {
+  const [user, setUser] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/auth/me', { credentials: 'include', headers:{Accept:'application/json'} })
+        const d = await r.json().catch(() => null)
+        if (!ignore && r.ok && d?.ok) setUser(d.user || null)
+      } catch {}
+    })()
+    return () => { ignore = true }
+  }, [])
+
+  async function logout() {
+    setBusy(true)
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }) } catch {}
+    window.location.href = afterLogout
+  }
+
+  return (
+    <div className="authbar" dir="rtl">
+      <div className="info">
+        {user ? (
+          <>
+            <span>مسجّل باسم:</span>
+            <b style={{marginInlineStart:6}}>{user.email}</b>
+            {Array.isArray(user.roles) && user.roles.length ? (
+              <span className="roles"> — {user.roles.join(', ')}</span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span>غير مسجّل دخول.</span>
+            <a className="btn" href="/admin/login?next=/checkin" style={{marginInlineStart:10}}>تسجيل الدخول</a>
+          </>
+        )}
+      </div>
+      <div className="actions">
+        <a className="btn" href="/admin/login?next=/checkin">تبديل مستخدم</a>
+        <button className="btn" onClick={logout} disabled={busy}>{busy ? '...' : 'تسجيل الخروج'}</button>
+      </div>
+      <style jsx>{`
+        .authbar{
+          display:flex;justify-content:space-between;align-items:center;
+          background:#fff;border:1px solid #e5e7eb;border-radius:10px;
+          padding:8px 10px;margin:0 auto 12px;max-width:720px
+        }
+        .btn{border:1px solid #d1d5db;background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;text-decoration:none}
+        .btn:hover{background:#f3f4f6}
+        .roles{color:#6b7280}
+        .actions{display:flex;gap:8px;align-items:center}
+      `}</style>
+    </div>
+  )
+}
+
 /* === استخراج الكود من أي نص/رابط ممسوح === */
 function parseRawInput(raw) {
   if (!raw) return ''
@@ -60,10 +120,8 @@ export default function CheckInPage() {
 
   async function submit(e, overrideValue) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault()
-    // 👇 ننظّف أي قيمة قبل الإرسال (أُصلِحَت الأقواس هنا)
     let code = parseRawInput((overrideValue ?? q) || '')
     code = code.trim()
-    // احذر من الإيميلات/أرقام الجوال — لا نحوّلها لكابتال
     if (code && !code.includes('@') && !/^\+?\d{6,}$/.test(code)) {
       code = code.toUpperCase()
     }
@@ -109,7 +167,7 @@ export default function CheckInPage() {
     }
   }
 
-  // ➊ الالتقاط من رابط الكاميرا
+  // الالتقاط من رابط الكاميرا
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
@@ -125,7 +183,7 @@ export default function CheckInPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ➋ ماسح QR داخل الصفحة (HTTPS أو localhost)
+  // ماسح QR داخل الصفحة (HTTPS أو localhost)
   async function startScan() {
     setScanErr('')
     if (!navigator?.mediaDevices?.getUserMedia) {
@@ -188,14 +246,17 @@ export default function CheckInPage() {
   useEffect(() => () => { stopScan() }, [])
 
   return (
-    <main dir="rtl" style={{display:'grid',placeItems:'center',minHeight:'80vh',padding:16}}>
-      <form onSubmit={submit} style={{background:'#fff',border:'1px solid #eee',borderRadius:12,padding:16,minWidth:320, maxWidth:560}}>
+    <main dir="rtl" className="page">
+      {/* شريط المستخدم */}
+      <AuthBar afterLogout="/admin/login?next=/checkin" />
+
+      <form onSubmit={submit} className="panel">
         <h3 style={{marginTop:0}}>(Check-in) واجهة تسجيل الدخول</h3>
         <div className="muted" style={{marginBottom:8,fontSize:13}}>
           امسح QR أو اكتب الكود/الإيميل/الجوال ثم اضغط تأكيد.
         </div>
 
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <div className="row">
           <input
             ref={inputRef}
             className="input"
@@ -236,15 +297,24 @@ export default function CheckInPage() {
             <div><strong>الدخول:</strong> {att.checkedIn ? '✓' : '—'}</div>
           </div>
         )}
-
-        <style jsx>{`
-          .input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0}
-          .btn{border:1px solid #d1d5db;background:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
-          .btn.primary{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
-          .btn:disabled{opacity:.7;cursor:default}
-          .muted{color:#6b7280}
-        `}</style>
       </form>
+
+      <style jsx>{`
+        .page{
+          display:grid;place-items:flex-start;justify-content:center;
+          min-height:100vh;padding:16px;background:#f7fafc
+        }
+        .panel{
+          background:#fff;border:1px solid #eee;border-radius:12px;
+          padding:16px;min-width:320px;max-width:720px;width:100%;margin:0 auto
+        }
+        .row{display:flex; gap:8px; align-items:center}
+        .input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0}
+        .btn{border:1px solid #d1d5db;background:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
+        .btn.primary{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+        .btn:disabled{opacity:.7;cursor:default}
+        .muted{color:#6b7280}
+      `}</style>
     </main>
   )
 }
