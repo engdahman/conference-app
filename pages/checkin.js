@@ -1,6 +1,5 @@
 // pages/checkin.js
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/router'
 import Script from 'next/script'
 
 /* ==================== شريط المستخدم (داخل الصفحة) ==================== */
@@ -95,7 +94,7 @@ function parseRawInput(raw) {
   return s
 }
 
-/* ==================== ماسح QR (ZXing عبر CDN) ==================== */
+/* ==================== ماسح QR (ZXingBrowser عبر CDN) ==================== */
 function ZxingQrScanner({ onResult }) {
   const videoRef = useRef(null)
   const readerRef = useRef(null)
@@ -104,7 +103,7 @@ function ZxingQrScanner({ onResult }) {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    const httpsOk = typeof window !== 'undefined' && (window.isSecureContext || location.hostname === 'localhost')
+    const httpsOk = typeof window !== 'undefined' && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
     const canCam  = !!navigator?.mediaDevices?.getUserMedia
     setSupported(httpsOk && canCam)
   }, [])
@@ -116,24 +115,38 @@ function ZxingQrScanner({ onResult }) {
       return
     }
     try {
-      if (!window.ZXing?.BrowserQRCodeReader) {
-        setErr('جاري تحميل الماسح… أعد المحاولة خلال لحظات.')
+      const ZX = window.ZXingBrowser // من سكربت @zxing/browser
+      const QrClass = ZX?.BrowserQRCodeReader || ZX?.BrowserMultiFormatReader
+      if (!QrClass) {
+        setErr('جاري تحميل الماسح… أعد المحاولة بعد لحظات.')
         return
       }
-      const QRReader = window.ZXing.BrowserQRCodeReader
-      readerRef.current = new QRReader()
 
-      const devices = await QRReader.listVideoInputDevices()
-      const preferBack = devices.find(d => /back|rear|environment/i.test(d.label))?.deviceId
-                      || devices[0]?.deviceId || null
+      readerRef.current = new QrClass()
+
+      // احصل على قائمة الكاميرات (مع دعم Safari)
+      let devices = []
+      if (typeof QrClass.listVideoInputDevices === 'function') {
+        devices = await QrClass.listVideoInputDevices()
+      } else if (typeof ZX.listVideoInputDevices === 'function') {
+        devices = await ZX.listVideoInputDevices()
+      } else {
+        const all = await navigator.mediaDevices.enumerateDevices()
+        devices = all.filter(d => d.kind === 'videoinput')
+      }
+
+      const preferBack =
+        devices.find(d => /back|rear|environment/i.test(d.label))?.deviceId ||
+        devices[0]?.deviceId || null
 
       await readerRef.current.decodeFromVideoDevice(
         preferBack,
         videoRef.current,
-        (result) => {
+        (result, _err, _controls) => {
           if (result) {
             stop()
-            onResult?.(result.getText())
+            const text = result.getText ? result.getText() : String(result)
+            onResult?.(text)
           }
         }
       )
@@ -178,7 +191,6 @@ function ZxingQrScanner({ onResult }) {
 }
 
 export default function CheckInPage() {
-  const router = useRouter()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('idle') // idle | busy | ok | already | notfound | missing | error
   const [msg, setMsg] = useState('')
@@ -242,7 +254,7 @@ export default function CheckInPage() {
     }
   }
 
-  // الالتقاط من رابط الكاميرا
+  // الالتقاط من رابط الكاميرا (إذا فُتح عبر QR يأخذ ?code=)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
@@ -260,8 +272,8 @@ export default function CheckInPage() {
 
   return (
     <main dir="rtl" className="page">
-      {/* تحميل مكتبة ZXing من CDN مرة واحدة */}
-      <Script src="https://unpkg.com/@zxing/library@0.20.0" strategy="afterInteractive" />
+      {/* تحميل مكتبة ZXing (المتصفح) */}
+      <Script src="https://unpkg.com/@zxing/browser@latest/umd/index.min.js" strategy="afterInteractive" />
 
       {/* شريط المستخدم */}
       <AuthBar afterLogout="/admin/login?next=/checkin" />
@@ -283,18 +295,19 @@ export default function CheckInPage() {
             autoFocus
             style={{flex:1}}
           />
+          <button className="btn primary" type="submit" disabled={status==='busy'}>
+            {status==='busy' ? 'جاري التحقق…' : 'تأكيد'}
+          </button>
         </div>
 
-        {/* ماسح QR الجديد */}
-        <ZxingQrScanner onResult={(text) => {
-          const val = parseRawInput(text)
-          setQ(val)
-          submit(null, val) // تأكيد تلقائي بعد القراءة
-        }} />
-
-        <button className="btn primary" type="submit" disabled={status==='busy'} style={{marginTop:10}}>
-          {status==='busy' ? 'جاري التحقق…' : 'تأكيد'}
-        </button>
+        {/* ماسح QR */}
+        <ZxingQrScanner
+          onResult={(raw) => {
+            const val = parseRawInput(raw)
+            setQ(val)
+            submit(null, val)
+          }}
+        />
 
         {status!=='idle' && msg && (
           <div style={{marginTop:10, color: status==='ok' || status==='already' ? '#15803d' : '#b91c1c'}}>
