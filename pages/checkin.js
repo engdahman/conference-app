@@ -2,11 +2,9 @@
 import { useEffect, useRef, useState } from 'react'
 import Script from 'next/script'
 
-/* ==================== شريط المستخدم (داخل الصفحة) ==================== */
 function AuthBar({ afterLogout = '/admin/login?next=/checkin' }) {
   const [user, setUser] = useState(null)
   const [busy, setBusy] = useState(false)
-
   useEffect(() => {
     let ignore = false
     ;(async () => {
@@ -18,41 +16,18 @@ function AuthBar({ afterLogout = '/admin/login?next=/checkin' }) {
     })()
     return () => { ignore = true }
   }, [])
-
-  async function logout() {
-    setBusy(true)
-    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }) } catch {}
-    window.location.href = afterLogout
-  }
-
+  async function logout() { setBusy(true); try{ await fetch('/api/auth/logout',{method:'POST',credentials:'include'}) }catch{} window.location.href = afterLogout }
   return (
     <div className="authbar" dir="rtl">
       <div className="info">
-        {user ? (
-          <>
-            <span>مسجّل باسم:</span>
-            <b style={{marginInlineStart:6}}>{user.email}</b>
-            {Array.isArray(user.roles) && user.roles.length ? (
-              <span className="roles"> — {user.roles.join(', ')}</span>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <span>غير مسجّل دخول.</span>
-            <a className="btn" href="/admin/login?next=/checkin" style={{marginInlineStart:10}}>تسجيل الدخول</a>
-          </>
-        )}
+        {user ? (<><span>مسجّل باسم:</span><b style={{marginInlineStart:6}}>{user.email}</b>{Array.isArray(user.roles)&&user.roles.length?<span className="roles"> — {user.roles.join(', ')}</span>:null}</>) : (<><span>غير مسجّل دخول.</span><a className="btn" href="/admin/login?next=/checkin" style={{marginInlineStart:10}}>تسجيل الدخول</a></>)}
       </div>
       <div className="actions">
         <a className="btn" href="/admin/login?next=/checkin">تبديل مستخدم</a>
         <button className="btn" onClick={logout} disabled={busy}>{busy ? '...' : 'تسجيل الخروج'}</button>
       </div>
       <style jsx>{`
-        .authbar{
-          display:flex;justify-content:space-between;align-items:center;
-          background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-          padding:8px 10px;margin:0 auto 12px;max-width:720px
-        }
+        .authbar{display:flex;justify-content:space-between;align-items:center;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;margin:0 auto 12px;max-width:720px}
         .btn{border:1px solid #d1d5db;background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;text-decoration:none}
         .btn:hover{background:#f3f4f6}
         .roles{color:#6b7280}
@@ -66,83 +41,92 @@ function AuthBar({ afterLogout = '/admin/login?next=/checkin' }) {
 function parseRawInput(raw) {
   if (!raw) return ''
   let s = String(raw).trim()
-
-  // لو كان رابط
   try {
     if (/^https?:\/\//i.test(s)) {
       const u = new URL(s)
-      const q =
-        u.searchParams.get('code') ||
-        u.searchParams.get('ticket') ||
-        u.searchParams.get('t')
+      const q = u.searchParams.get('code') || u.searchParams.get('ticket') || u.searchParams.get('t')
       if (q) return q.trim()
-      // آخر جزء في المسار (مثال /checkin/ABC123)
       const parts = u.pathname.split('/').filter(Boolean)
-      const last = parts[parts.length - 1]
+      const last = parts[parts.length-1]
       if (last && /[A-Za-z0-9-]{4,}/.test(last)) return last
     }
   } catch {}
-
-  // TICKET:XXXX أو CODE:XXXX أو TKT:XXXX
   const m1 = s.match(/(?:^|\s)(?:TICKET|CODE|TKT)\s*[:=]\s*([A-Za-z0-9-]{4,})/i)
   if (m1) return m1[1]
-
-  // التقط “كودًا” واضحًا داخل النص
   const m2 = s.match(/(?:^|[^A-Z0-9-])(TKT-[A-Z0-9-]+|[A-Z0-9]{5,})(?:[^A-Z0-9-]|$)/i)
   if (m2) return m2[1]
-
   return s
 }
 
-/* ==================== ماسح QR (ZXingBrowser عبر CDN) ==================== */
+/* ==================== ماسح QR عبر ZXing (CDN) ==================== */
 function ZxingQrScanner({ onResult }) {
   const videoRef = useRef(null)
   const readerRef = useRef(null)
   const [running, setRunning] = useState(false)
   const [supported, setSupported] = useState(false)
   const [err, setErr] = useState('')
+  const [libReady, setLibReady] = useState(false)
 
+  // HTTPS + getUserMedia شرط أساسي
   useEffect(() => {
-    const httpsOk = typeof window !== 'undefined' && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    const httpsOk = typeof window !== 'undefined' && (window.isSecureContext || ['localhost','127.0.0.1'].includes(location.hostname))
     const canCam  = !!navigator?.mediaDevices?.getUserMedia
     setSupported(httpsOk && canCam)
+    // إن كان السكربت قد لُوّد مسبقًا
+    if (window.ZXingBrowser || window.ZXing) setLibReady(true)
   }, [])
+
+  function getZX() {
+    return window.ZXingBrowser || window.ZXing || null
+  }
+
+  async function listCameras(ZX) {
+    // نحاول كل الطرق المعروفة:
+    try {
+      if (typeof ZX?.listVideoInputDevices === 'function') {
+        return await ZX.listVideoInputDevices()
+      }
+    } catch {}
+    try {
+      if (typeof ZX?.BrowserCodeReader?.listVideoInputDevices === 'function') {
+        return await ZX.BrowserCodeReader.listVideoInputDevices()
+      }
+    } catch {}
+    // أخيرًا من المتصفح مباشرة
+    const all = await navigator.mediaDevices.enumerateDevices()
+    return all.filter(d => d.kind === 'videoinput')
+  }
 
   async function start() {
     setErr('')
     if (!supported) {
-      setErr('الكاميرا تتطلب HTTPS (أو localhost) والسماح بها من إعدادات المتصفح.')
+      setErr('فتح الكاميرا يتطلب HTTPS (أو localhost) مع السماح للكاميرا في المتصفح.')
+      return
+    }
+    const ZX = getZX()
+    if (!ZX) {
+      setErr('جاري تحميل الماسح… أعد المحاولة بعد لحظات.')
       return
     }
     try {
-      const ZX = window.ZXingBrowser // من سكربت @zxing/browser
-      const QrClass = ZX?.BrowserQRCodeReader || ZX?.BrowserMultiFormatReader
-      if (!QrClass) {
-        setErr('جاري تحميل الماسح… أعد المحاولة بعد لحظات.')
+      const ReaderClass =
+        ZX.BrowserQRCodeReader ||
+        ZX.BrowserMultiFormatReader
+      if (!ReaderClass) {
+        setErr('تعذّر تهيئة الماسح. أعد تحميل الصفحة.')
         return
       }
+      readerRef.current = new ReaderClass()
 
-      readerRef.current = new QrClass()
-
-      // احصل على قائمة الكاميرات (مع دعم Safari)
-      let devices = []
-      if (typeof QrClass.listVideoInputDevices === 'function') {
-        devices = await QrClass.listVideoInputDevices()
-      } else if (typeof ZX.listVideoInputDevices === 'function') {
-        devices = await ZX.listVideoInputDevices()
-      } else {
-        const all = await navigator.mediaDevices.enumerateDevices()
-        devices = all.filter(d => d.kind === 'videoinput')
-      }
-
+      const devices = await listCameras(ZX)
       const preferBack =
         devices.find(d => /back|rear|environment/i.test(d.label))?.deviceId ||
-        devices[0]?.deviceId || null
+        devices[0]?.deviceId || undefined
 
       await readerRef.current.decodeFromVideoDevice(
         preferBack,
         videoRef.current,
-        (result, _err, _controls) => {
+        (result) => {
           if (result) {
             stop()
             const text = result.getText ? result.getText() : String(result)
@@ -159,7 +143,7 @@ function ZxingQrScanner({ onResult }) {
   function stop() {
     try { readerRef.current?.reset?.() } catch {}
     const stream = videoRef.current?.srcObject
-    try { stream?.getTracks()?.forEach(t => t.stop()) } catch {}
+    try { stream?.getTracks?.().forEach(t => t.stop()) } catch {}
     if (videoRef.current) videoRef.current.srcObject = null
     setRunning(false)
   }
@@ -167,25 +151,15 @@ function ZxingQrScanner({ onResult }) {
   useEffect(() => () => stop(), [])
 
   return (
-    <div>
-      <div style={{display:'flex', gap:8, marginTop:10, marginBottom:8}}>
+    <div style={{marginTop:10}}>
+      <div className="row" style={{gap:8, marginBottom:8}}>
         {!running
-          ? <button type="button" className="btn" onClick={start}>تشغيل الكاميرا</button>
+          ? <button type="button" className="btn" onClick={start} disabled={!supported || (!libReady && !(window.ZXingBrowser||window.ZXing))}>تشغيل الكاميرا</button>
           : <button type="button" className="btn" onClick={stop}>إيقاف</button>}
       </div>
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        style={{width:'100%', borderRadius:10, border:'1px solid #e5e7eb', background:'#000'}}
-      />
+      <video ref={videoRef} playsInline muted autoPlay style={{width:'100%',borderRadius:10,border:'1px solid #e5e7eb',background:'#000'}} />
       {err && <div style={{marginTop:6,color:'#b91c1c',fontSize:13}}>{err}</div>}
-      {!supported && (
-        <div className="muted" style={{marginTop:6}}>
-          افتح الصفحة عبر HTTPS (أو localhost) واسمح للكاميرا من إعدادات الموقع في Safari.
-        </div>
-      )}
+      {!supported && <div className="muted" style={{marginTop:6}}>افتح الصفحة عبر HTTPS واسمح للكاميرا من إعدادات الموقع في Safari.</div>}
     </div>
   )
 }
@@ -197,71 +171,43 @@ export default function CheckInPage() {
   const [att, setAtt] = useState(null)
   const inputRef = useRef(null)
 
-  function onChange(e) {
-    setQ(e.target.value)
-    if (status !== 'busy') { setStatus('idle'); setMsg('') }
-  }
-  function onKeyDown(e) {
-    if (e.key === 'Enter') submit(e)
-  }
+  function onChange(e){ setQ(e.target.value); if (status!=='busy'){ setStatus('idle'); setMsg('') } }
+  function onKeyDown(e){ if (e.key==='Enter') submit(e) }
 
   async function submit(e, overrideValue) {
-    if (e && typeof e.preventDefault === 'function') e.preventDefault()
+    if (e?.preventDefault) e.preventDefault()
     let code = parseRawInput((overrideValue ?? q) || '')
     code = code.trim()
-    if (code && !code.includes('@') && !/^\+?\d{6,}$/.test(code)) {
-      code = code.toUpperCase()
-    }
-
+    if (code && !code.includes('@') && !/^\+?\d{6,}$/.test(code)) code = code.toUpperCase()
     setAtt(null); setMsg('')
-
-    if (!code) {
-      setStatus('missing')
-      setMsg('أدخل الكود أو الإيميل/الجوال أولاً')
-      return
-    }
+    if (!code){ setStatus('missing'); setMsg('أدخل الكود أو الإيميل/الجوال أولاً'); return }
 
     setStatus('busy')
-    try {
+    try{
       const r = await fetch('/api/checkin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ code })
+        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({ code })
       })
-      const d = await r.json().catch(() => ({}))
-
+      const d = await r.json().catch(()=>({}))
       if (!r.ok || !d?.success) {
-        if (d?.error === 'not_found') {
-          setStatus('notfound'); setMsg('لا يوجد سجل مطابق')
-        } else if (d?.error === 'missing' || d?.error === 'missing_code' || d?.error === 'bad_input') {
-          setStatus('missing'); setMsg('المدخل غير صالح أو مفقود')
-        } else if (r.status === 401 || r.status === 403 || d?.error === 'forbidden') {
-          setStatus('error'); setMsg('يلزم تسجيل الدخول كـ Admin/Staff')
-        } else {
-          setStatus('error'); setMsg(d?.error || 'خطأ غير متوقع')
-        }
+        if (d?.error==='not_found') { setStatus('notfound'); setMsg('لا يوجد سجل مطابق') }
+        else if (['missing','missing_code','bad_input'].includes(d?.error)) { setStatus('missing'); setMsg('المدخل غير صالح أو مفقود') }
+        else if (r.status===401 || r.status===403 || d?.error==='forbidden') { setStatus('error'); setMsg('يلزم تسجيل الدخول كـ Admin/Staff') }
+        else { setStatus('error'); setMsg(d?.error || 'خطأ غير متوقع') }
         return
       }
-
       setAtt(d.attendee)
       setStatus(d.already ? 'already' : 'ok')
       setMsg(d.already ? 'تم تسجيل الدخول مسبقًا' : 'تم تسجيل الدخول بنجاح ✓')
-      setQ('')
-      inputRef.current?.focus()
+      setQ(''); inputRef.current?.focus()
     } catch (e2) {
       setStatus('error'); setMsg(e2.message || 'network_error')
     }
   }
 
-  // الالتقاط من رابط الكاميرا (إذا فُتح عبر QR يأخذ ?code=)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const u = new URL(window.location.href)
-    const codeParam =
-      u.searchParams.get('code') ||
-      u.searchParams.get('ticket') ||
-      u.searchParams.get('t')
+    const codeParam = u.searchParams.get('code') || u.searchParams.get('ticket') || u.searchParams.get('t')
     if (codeParam) {
       const val = parseRawInput(decodeURIComponent(codeParam))
       window.history.replaceState({}, '', u.pathname)
@@ -272,17 +218,19 @@ export default function CheckInPage() {
 
   return (
     <main dir="rtl" className="page">
-      {/* تحميل مكتبة ZXing (المتصفح) */}
-      <Script src="https://unpkg.com/@zxing/browser@latest/umd/index.min.js" strategy="afterInteractive" />
+      {/* تحميل مكتبة ZXing (UMD) */}
+      <Script
+        src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"
+        strategy="afterInteractive"
+        crossOrigin="anonymous"
+        onLoad={() => { /* إشارة للجاهزية */ }}
+      />
 
-      {/* شريط المستخدم */}
       <AuthBar afterLogout="/admin/login?next=/checkin" />
 
       <form onSubmit={submit} className="panel">
         <h3 style={{marginTop:0}}>(Check-in) واجهة تسجيل الدخول</h3>
-        <div className="muted" style={{marginBottom:8,fontSize:13}}>
-          امسح QR أو اكتب الكود/الإيميل/الجوال ثم اضغط تأكيد.
-        </div>
+        <div className="muted" style={{marginBottom:8,fontSize:13}}>امسح QR أو اكتب الكود/الإيميل/الجوال ثم اضغط تأكيد.</div>
 
         <div className="row">
           <input
@@ -300,7 +248,7 @@ export default function CheckInPage() {
           </button>
         </div>
 
-        {/* ماسح QR */}
+        {/* الماسح */}
         <ZxingQrScanner
           onResult={(raw) => {
             const val = parseRawInput(raw)
@@ -310,7 +258,7 @@ export default function CheckInPage() {
         />
 
         {status!=='idle' && msg && (
-          <div style={{marginTop:10, color: status==='ok' || status==='already' ? '#15803d' : '#b91c1c'}}>
+          <div style={{marginTop:10, color: (status==='ok'||status==='already') ? '#15803d' : '#b91c1c'}}>
             {msg}
           </div>
         )}
@@ -325,14 +273,8 @@ export default function CheckInPage() {
       </form>
 
       <style jsx>{`
-        .page{
-          display:grid;place-items:flex-start;justify-content:center;
-          min-height:100vh;padding:16px;background:#f7fafc
-        }
-        .panel{
-          background:#fff;border:1px solid #eee;border-radius:12px;
-          padding:16px;min-width:320px;max-width:720px;width:100%;margin:0 auto
-        }
+        .page{display:grid;place-items:flex-start;justify-content:center;min-height:100vh;padding:16px;background:#f7fafc}
+        .panel{background:#fff;border:1px solid #eee;border-radius:12px;padding:16px;min-width:320px;max-width:720px;width:100%;margin:0 auto}
         .row{display:flex; gap:8px; align-items:center}
         .input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0}
         .btn{border:1px solid #d1d5db;background:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
