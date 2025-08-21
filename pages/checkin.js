@@ -1,6 +1,7 @@
 // pages/checkin.js
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
+import Script from 'next/script'
 
 /* ==================== شريط المستخدم (داخل الصفحة) ==================== */
 function AuthBar({ afterLogout = '/admin/login?next=/checkin' }) {
@@ -94,20 +95,94 @@ function parseRawInput(raw) {
   return s
 }
 
+/* ==================== ماسح QR (ZXing عبر CDN) ==================== */
+function ZxingQrScanner({ onResult }) {
+  const videoRef = useRef(null)
+  const readerRef = useRef(null)
+  const [running, setRunning] = useState(false)
+  const [supported, setSupported] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    const httpsOk = typeof window !== 'undefined' && (window.isSecureContext || location.hostname === 'localhost')
+    const canCam  = !!navigator?.mediaDevices?.getUserMedia
+    setSupported(httpsOk && canCam)
+  }, [])
+
+  async function start() {
+    setErr('')
+    if (!supported) {
+      setErr('الكاميرا تتطلب HTTPS (أو localhost) والسماح بها من إعدادات المتصفح.')
+      return
+    }
+    try {
+      if (!window.ZXing?.BrowserQRCodeReader) {
+        setErr('جاري تحميل الماسح… أعد المحاولة خلال لحظات.')
+        return
+      }
+      const QRReader = window.ZXing.BrowserQRCodeReader
+      readerRef.current = new QRReader()
+
+      const devices = await QRReader.listVideoInputDevices()
+      const preferBack = devices.find(d => /back|rear|environment/i.test(d.label))?.deviceId
+                      || devices[0]?.deviceId || null
+
+      await readerRef.current.decodeFromVideoDevice(
+        preferBack,
+        videoRef.current,
+        (result) => {
+          if (result) {
+            stop()
+            onResult?.(result.getText())
+          }
+        }
+      )
+      setRunning(true)
+    } catch (e) {
+      setErr('تعذّر فتح الكاميرا: ' + (e?.message || e))
+    }
+  }
+
+  function stop() {
+    try { readerRef.current?.reset?.() } catch {}
+    const stream = videoRef.current?.srcObject
+    try { stream?.getTracks()?.forEach(t => t.stop()) } catch {}
+    if (videoRef.current) videoRef.current.srcObject = null
+    setRunning(false)
+  }
+
+  useEffect(() => () => stop(), [])
+
+  return (
+    <div>
+      <div style={{display:'flex', gap:8, marginTop:10, marginBottom:8}}>
+        {!running
+          ? <button type="button" className="btn" onClick={start}>تشغيل الكاميرا</button>
+          : <button type="button" className="btn" onClick={stop}>إيقاف</button>}
+      </div>
+      <video
+        ref={videoRef}
+        playsInline
+        muted
+        autoPlay
+        style={{width:'100%', borderRadius:10, border:'1px solid #e5e7eb', background:'#000'}}
+      />
+      {err && <div style={{marginTop:6,color:'#b91c1c',fontSize:13}}>{err}</div>}
+      {!supported && (
+        <div className="muted" style={{marginTop:6}}>
+          افتح الصفحة عبر HTTPS (أو localhost) واسمح للكاميرا من إعدادات الموقع في Safari.
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function CheckInPage() {
   const router = useRouter()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('idle') // idle | busy | ok | already | notfound | missing | error
   const [msg, setMsg] = useState('')
   const [att, setAtt] = useState(null)
-
-  // ماسح QR
-  const [scanOn, setScanOn] = useState(false)
-  const [scanErr, setScanErr] = useState('')
-  const videoRef = useRef(null)
-  const streamRef = useRef(null)
-  const rafRef = useRef(0)
-
   const inputRef = useRef(null)
 
   function onChange(e) {
@@ -183,70 +258,11 @@ export default function CheckInPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ماسح QR داخل الصفحة (HTTPS أو localhost)
-  async function startScan() {
-    setScanErr('')
-    if (!navigator?.mediaDevices?.getUserMedia) {
-      setScanErr('المتصفح لا يدعم الكاميرا')
-      return
-    }
-    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-      setScanErr('فتح الكاميرا يتطلب HTTPS أو localhost')
-      return
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false
-      })
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
-      setScanOn(true)
-
-      if ('BarcodeDetector' in window) {
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-        const loop = async () => {
-          if (!videoRef.current || !scanOn) return
-          try {
-            const codes = await detector.detect(videoRef.current)
-            const raw = codes?.[0]?.rawValue
-            if (raw) {
-              await stopScan()
-              const val = parseRawInput(raw)
-              setQ(val)
-              submit(null, val)
-              return
-            }
-          } catch {}
-          rafRef.current = requestAnimationFrame(loop)
-        }
-        loop()
-      } else {
-        setScanErr('ماسح QR غير مدعوم في هذا المتصفح. استخدم الكاميرا العادية لمسح رابط الكود.')
-      }
-    } catch (e) {
-      setScanErr(e?.message || 'تعذر فتح الكاميرا')
-    }
-  }
-
-  async function stopScan() {
-    cancelAnimationFrame(rafRef.current)
-    setScanOn(false)
-    try {
-      const tracks = streamRef.current?.getTracks?.() || []
-      tracks.forEach(t => t.stop())
-    } catch {}
-    if (videoRef.current) videoRef.current.srcObject = null
-  }
-
-  useEffect(() => () => { stopScan() }, [])
-
   return (
     <main dir="rtl" className="page">
+      {/* تحميل مكتبة ZXing من CDN مرة واحدة */}
+      <Script src="https://unpkg.com/@zxing/library@0.20.0" strategy="afterInteractive" />
+
       {/* شريط المستخدم */}
       <AuthBar afterLogout="/admin/login?next=/checkin" />
 
@@ -267,18 +283,14 @@ export default function CheckInPage() {
             autoFocus
             style={{flex:1}}
           />
-          {!scanOn
-            ? <button type="button" className="btn" onClick={startScan}>مسح QR</button>
-            : <button type="button" className="btn" onClick={stopScan}>إيقاف</button>
-          }
         </div>
 
-        {scanOn && (
-          <div style={{marginTop:10}}>
-            <video ref={videoRef} playsInline muted style={{width:'100%',borderRadius:10,border:'1px solid #e5e7eb'}} />
-            {scanErr && <div style={{marginTop:6,color:'#b91c1c',fontSize:13}}>{scanErr}</div>}
-          </div>
-        )}
+        {/* ماسح QR الجديد */}
+        <ZxingQrScanner onResult={(text) => {
+          const val = parseRawInput(text)
+          setQ(val)
+          submit(null, val) // تأكيد تلقائي بعد القراءة
+        }} />
 
         <button className="btn primary" type="submit" disabled={status==='busy'} style={{marginTop:10}}>
           {status==='busy' ? 'جاري التحقق…' : 'تأكيد'}
