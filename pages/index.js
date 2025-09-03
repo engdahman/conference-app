@@ -44,6 +44,10 @@ function getSpeakerPhoto(sp = {}) {
   const raw = sp.photo || sp.image || sp.avatar || sp.avatarUrl || ''
   return resolveSrc(raw)
 }
+function getMemberPhoto(m = {}) {
+  const raw = m.photo || m.image || m.avatar || m.avatarUrl || ''
+  return resolveSrc(raw)
+}
 
 function groupByTier(items = []) {
   if (!items.length) return []
@@ -96,6 +100,34 @@ function compareAgenda(a,b){
   return (a.title||'').localeCompare(b.title||'')
 }
 
+// ===== تحميل موديل اللجنة بشكل اختياري وآمن =====
+async function loadCommitteeModelIfAvailable() {
+  try {
+    const _require = eval('require') // لتجنّب تحليل Webpack/Next
+    const fs = _require('fs')
+    const path = _require('path')
+    const candidates = [
+      // مسارات شائعة في مشاريع Next
+      ['models','Committee.js'], ['models','Committee.ts'],
+      ['models','CommitteeMember.js'], ['models','CommitteeMember.ts'],
+      ['src','models','Committee.js'], ['src','models','Committee.ts'],
+      ['src','models','CommitteeMember.js'], ['src','models','CommitteeMember.ts'],
+    ].map(parts => path.join(process.cwd(), ...parts))
+
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        const mod = _require(p)
+        return mod?.default || mod
+      }
+    }
+
+    // محاولة أخيرة عبر alias @ (إن وُجدت فعليًا)
+    try { return _require('@/models/Committee') } catch {}
+    try { return _require('@/models/CommitteeMember') } catch {}
+  } catch {}
+  return null
+}
+
 export async function getServerSideProps() {
   await dbConnect()
 
@@ -104,16 +136,26 @@ export async function getServerSideProps() {
   const sponsorsDocs = await Sponsor.find({}).sort({ tier: 1, name: 1 }).lean()
   const agendaDocs   = await AgendaItem.find({}).lean()
 
+  // ✅ اللجنة التحضيرية: تُحمَّل فقط إن وُجد الموديل
+  let committeeDocs = []
+  try {
+    const CommitteeModel = await loadCommitteeModelIfAvailable()
+    if (CommitteeModel?.find) {
+      committeeDocs = await CommitteeModel.find({}).sort({ order: 1, name: 1 }).lean()
+    }
+  } catch {}
+
   const settings = settingsDoc ? toPlain(settingsDoc) : {}
   const speakers = toPlainList(speakersDocs)
   const sponsors = toPlainList(sponsorsDocs)
+  const committee = toPlainList(committeeDocs)
   const agendaRaw = toPlainList(agendaDocs)
   const agenda    = [...agendaRaw].sort(compareAgenda)
 
-  return { props: { settings, speakers, sponsors, agenda } }
+  return { props: { settings, speakers, sponsors, agenda, committee } }
 }
 
-export default function Home({ settings, speakers, sponsors, agenda }) {
+export default function Home({ settings, speakers, sponsors, agenda, committee }) {
   const eventTitle   = firstNonEmpty(settings?.eventTitle, process.env.NEXT_PUBLIC_SITE_NAME, 'ملتقى هندسي')
   const tagline      = firstNonEmpty(settings?.tagline, process.env.NEXT_PUBLIC_EVENT_TAGLINE)
   const dateRange    = firstNonEmpty(settings?.eventDateRangeText, process.env.NEXT_PUBLIC_EVENT_DATE_RANGE_TEXT)
@@ -127,13 +169,11 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
   const bannerImage   = resolveSrc(firstNonEmpty(settings?.bannerImage, settings?.banner, settings?.heroImage))
   const bannerLink    = settings?.bannerLink || ''
 
-  // ✅ إعدادات زر التسجيل (من الـ DB + fallbacks للبيئة)
+  // ✅ إعدادات زر التسجيل
   const regModeRaw = String(firstNonEmpty(settings?.registrationMode, 'internal')).toLowerCase()
   const regUrl     = String(firstNonEmpty(settings?.registrationUrl, '')).trim()
   const regNewTab  = asBool(settings?.registrationNewTab)
   const haveValidExternal = isHttpUrl(regUrl)
-
-  // استخدم الخارجي إذا كان الوضع external + رابط صالح، أو إن لم يُحدّد الوضع لكن اللينك صالح
   const useExternal = (regModeRaw === 'external' && haveValidExternal) || (!regModeRaw && haveValidExternal)
 
   const agendaGrouped = groupAgenda(agenda)
@@ -192,6 +232,7 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
               )}
               <a href="#agenda" className="btn">البرنامج</a>
               <a href="#speakers" className="btn">المتحدثون</a>
+              <a href="#committee" className="btn">اللجنة التحضيرية</a>
               <a href="#sponsors" className="btn">الرعاة</a>
             </div>
           </div>
@@ -223,8 +264,32 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
           </div>
         </section>
 
+        {/* COMMITTEE */}
+        <section id="committee" className="section alt">
+          <div className="container">
+            <div className="section-head">
+              <h2>اللجنة التحضيرية</h2>
+              <p className="section-sub">فريق التنظيم والإشراف على الملتقى</p>
+            </div>
+            <div className="grid cards">
+              {committee?.length ? committee.map(m => (
+                <article key={m._id} className="card member">
+                  <div className="avatar">
+                    {getMemberPhoto(m) ? <img src={getMemberPhoto(m)} alt={m.name} /> : <div className="avatar-ph">No Image</div>}
+                  </div>
+                  <div className="body">
+                    <h3 className="name">{m.name}</h3>
+                    {m.title && <div className="role">{m.title}</div>}
+                    {m.bio && <p className="bio">{m.bio}</p>}
+                  </div>
+                </article>
+              )) : <p className="empty">سيتم الإعلان عن أعضاء اللجنة قريبًا.</p>}
+            </div>
+          </div>
+        </section>
+
         {/* AGENDA */}
-        <section id="agenda" className="section alt">
+        <section id="agenda" className="section">
           <div className="container">
             <div className="section-head">
               <h2>البرنامج</h2>
@@ -256,7 +321,7 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
         </section>
 
         {/* SPONSORS */}
-        <section id="sponsors" className="section">
+        <section id="sponsors" className="section alt">
           <div className="container">
             <div className="section-head">
               <h2>الرعاة</h2>
@@ -400,18 +465,23 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
         .card:hover{ transform:translateY(-2px); box-shadow:0 10px 24px rgba(2,6,23,.08) }
         .card .body{ padding:14px }
 
-        .speaker .avatar{
+        .speaker .avatar,
+        .member .avatar{
           height:240px; background:#f1f5f9;
           display:flex; align-items:center; justify-content:center; overflow:hidden
         }
-        .speaker .avatar img{ width:100%; height:100%; object-fit:cover }
-        .speaker .name{ margin:0 0 4px; font-size:18px; font-weight:800 }
-        .speaker .role{ color:#64748b; font-size:14px; margin-bottom:6px }
+        .speaker .avatar img,
+        .member .avatar img{ width:100%; height:100%; object-fit:cover }
+        .speaker .name,
+        .member .name{ margin:0 0 4px; font-size:18px; font-weight:800 }
+        .speaker .role,
+        .member .role{ color:#64748b; font-size:14px; margin-bottom:6px }
         .speaker .talk{
           background:var(--chip); display:inline-block;
           border:1px solid var(--border); padding:4px 8px; border-radius:8px; margin-bottom:8px
         }
-        .speaker .bio{ margin:0; color:#64748b; font-size:14px; line-height:1.8 }
+        .speaker .bio,
+        .member .bio{ margin:0; color:#64748b; font-size:14px; line-height:1.8 }
 
         .agenda-day{ margin-bottom:26px }
         .agenda-title{ margin:0 0 12px; font-size:20px; font-weight:900; color:#0f172a }
@@ -471,7 +541,7 @@ export default function Home({ settings, speakers, sponsors, agenda }) {
         @media (min-width:1024px){
           .title{ font-size:56px }
           .tagline{ font-size:20px }
-          .speaker .avatar{ height:260px }
+          .speaker .avatar, .member .avatar{ height:260px }
           .section{ padding:72px 0 }
         }
         @media (max-width:640px){
