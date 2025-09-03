@@ -396,6 +396,130 @@ function SpeakersTab({ api, basePath }) {
   )
 }
 
+/* ===================== تبويب: اللجنة التحضيرية ===================== */
+/* ===================== تبويب: اللجنة التحضيرية ===================== */
+function CommitteeTab({ api, basePath }) {
+  const empty = { name:'', title:'', bio:'', photo:'', order:0 }
+  const [rows, setRows] = useState([])
+  const [form, setForm] = useState(empty)
+  const [busy, setBusy] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [loadErr, setLoadErr] = useState('')
+
+  async function load(){
+    setLoadErr('')
+    try{
+      // ✅ استخدم مسار الأدمن الذي يعيد القائمة مع حقول success/items
+      const r = await api('/api/admin/committee?bust='+Date.now(), { headers:{Accept:'application/json'} })
+      const d = await r.json().catch(()=>({}))
+      if (!d?.success) throw new Error(d?.error || d?.message || 'failed')
+      const list = Array.isArray(d.items) ? d.items : (Array.isArray(d.committee) ? d.committee : [])
+      const sorted = [...list].sort(
+        (a,b)=>(+a.order||0)-(+b.order||0) || String(a.name||'').localeCompare(String(b.name||''))
+      )
+      setRows(sorted)
+    }catch(e){
+      setLoadErr('تعذر تحميل القائمة: '+(e.message||''))
+    }
+  }
+  useEffect(()=>{ load() },[])
+
+  async function save(){
+    setBusy(true)
+    try{
+      const method = editingId ? 'PUT' : 'POST'
+      const qs = editingId ? ('?id='+editingId) : ''
+      const payload = { ...form, photo: toRootPath(form.photo), order: Number(form.order)||0 }
+      const r = await api('/api/admin/committee'+qs, {
+        method,
+        headers:{'Content-Type':'application/json', Accept:'application/json'},
+        body: JSON.stringify(payload)
+      })
+      const d = await r.json().catch(()=>null)
+      if (!d?.success) {
+        alert('فشل الحفظ: ' + (d?.error || d?.message || ''))
+        return
+      }
+      cancelEdit()
+      await load()
+    } finally { setBusy(false) }
+  }
+
+  function startEdit(row){
+    setEditingId(row._id)
+    setForm({
+      name:row.name||'', title:row.title||'', bio:row.bio||'',
+      photo: toRootPath(row.photo||''), order: Number(row.order)||0
+    })
+    window?.scrollTo?.({ top:0, behavior:'smooth' })
+  }
+  function cancelEdit(){ setEditingId(null); setForm(empty) }
+
+  async function del(id){
+    if(!confirm('حذف هذا العضو؟')) return
+    const r = await api('/api/admin/committee?id='+id, { method:'DELETE', headers:{Accept:'application/json'} })
+    const d = await r.json().catch(()=>null)
+    if (!d?.success) { alert('فشل الحذف: '+(d?.error || d?.message || '')); return }
+    await load()
+  }
+
+  return (
+    <>
+      <div className="card">
+        <h3>{editingId ? 'تحرير عضو' : 'إضافة عضو للجنة'}</h3>
+
+        <label>الاسم</label>
+        <input className="input" value={form.name} onChange={e=>setForm({...form, name:e.target.value})} />
+
+        <div className="grid2">
+          <div>
+            <label>المسمّى/الدور</label>
+            <input className="input" value={form.title} onChange={e=>setForm({...form, title:e.target.value})} />
+          </div>
+          <div>
+            <label>الترتيب</label>
+            <input className="input" type="number" value={form.order} onChange={e=>setForm({...form, order:e.target.value})} placeholder="0" />
+          </div>
+        </div>
+
+        <label>نبذة (اختياري)</label>
+        <textarea className="textarea" rows={3} value={form.bio} onChange={e=>setForm({...form, bio:e.target.value})} />
+
+        <label>الصورة (رابط) أو ارفع</label>
+        <div className="row">
+          <input className="input" value={form.photo} onChange={e=>setForm({...form, photo:e.target.value})} placeholder="/uploads/member.jpg" />
+          <Uploader api={api} onUploaded={p=>setForm({...form, photo:p})} />
+        </div>
+        {form.photo && <img className="preview" src={resolveForView(form.photo, basePath)} alt="member" />}
+
+        <div className="row" style={{marginTop:12}}>
+          <button className="btn primary" disabled={busy} onClick={save}>{busy?'...':(editingId?'تحديث':'حفظ')}</button>
+          {editingId && <button className="btn" onClick={cancelEdit}>إلغاء</button>}
+        </div>
+        {loadErr && <div className="muted" style={{marginTop:8,color:'#b91c1c'}}>{loadErr}</div>}
+      </div>
+
+      <div className="cards">
+        {rows.map(r=>(
+          <div key={r._id} className="card">
+            <div className="row" style={{gap:12,alignItems:'center'}}>
+              {r.photo && <img src={resolveForView(r.photo, basePath)} alt={r.name} style={{width:64,height:64,objectFit:'cover',borderRadius:8,border:'1px solid #eee'}}/>}
+              <div>
+                <div style={{fontWeight:800}}>{r.name}</div>
+                {r.title && <div className="muted">{r.title}</div>}
+              </div>
+            </div>
+            <div className="row" style={{marginTop:10}}>
+              <button className="btn" onClick={()=>startEdit(r)}>تحرير</button>
+              <button className="btn" onClick={()=>del(r._id)}>حذف</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
 /* ===================== تبويب: الرعاة ===================== */
 function SponsorsTab({ api, basePath }){
   const empty = { name:'', logo:'', url:'', tier:'', description:'' }
@@ -730,8 +854,8 @@ function AttendeesTab({ api }){
     const csv = [header.join(',')].concat(
       rows.map(r => header.map(h => {
         const v = r[h] == null ? '' : String(r[h])
-        return `"${v.replace(/"/g,'""')}"`
-      }).join(','))
+        return `"${v.replace(/"/g,'""')}"`}
+      ).join(','))
     ).join('\n')
     const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -1022,7 +1146,7 @@ function UsersTab({ api }){
 }
 
 /* ===================== صفحة الأدمن ===================== */
-const TABS = ['settings','speakers','sponsors','agenda','attendees','users']
+const TABS = ['settings','speakers','committee','sponsors','agenda','attendees','users']
 
 function AdminPage(){
   const router = useRouter()
@@ -1133,6 +1257,7 @@ function AdminPage(){
         <nav className="tabs">
           <button className={cx('tab', tab==='settings'&&'active')} onClick={()=>switchTab('settings')}>الإعدادات</button>
           <button className={cx('tab', tab==='speakers'&&'active')} onClick={()=>switchTab('speakers')}>المتحدثون</button>
+          <button className={cx('tab', tab==='committee'&&'active')} onClick={()=>switchTab('committee')}>اللجنة التحضيرية</button>
           <button className={cx('tab', tab==='sponsors'&&'active')} onClick={()=>switchTab('sponsors')}>الرعاة</button>
           <button className={cx('tab', tab==='agenda'&&'active')} onClick={()=>switchTab('agenda')}>الأجندة</button>
           <button className={cx('tab', tab==='attendees'&&'active')} onClick={()=>switchTab('attendees')}>الحضور</button>
@@ -1141,6 +1266,7 @@ function AdminPage(){
 
         {tab==='settings'  && <SettingsTab api={api} basePath={basePath}/>}
         {tab==='speakers'  && <SpeakersTab api={api} basePath={basePath}/>}
+        {tab==='committee' && <CommitteeTab api={api} basePath={basePath}/>}
         {tab==='sponsors'  && <SponsorsTab api={api} basePath={basePath}/>}
         {tab==='agenda'    && <AgendaTab api={api}/>}
         {tab==='attendees' && <AttendeesTab api={api}/>}
